@@ -665,6 +665,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
 # Ancillary functions --------------------------------------------------------------------------------------------------
 def load_image(self, index):
     # loads 1 image from dataset, returns img, original hw, resized hw
+
     img = self.imgs[index]
     if img is None:  # not cached
         path = self.img_files[index]

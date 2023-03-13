@@ -3,6 +3,8 @@ import logging
 import sys
 from copy import deepcopy
 
+from models.custom import MyConv2dSVD
+
 sys.path.append('./')  # to run '$ python *.py' files in subdirectories
 logger = logging.getLogger(__name__)
 import torch
@@ -699,9 +701,13 @@ class Model(nn.Module):
             elif isinstance(m, RepConv_OREPA):
                 #print(f" switch_to_deploy")
                 m.switch_to_deploy()
-            elif type(m) is Conv and hasattr(m, 'bn'):
-                m.conv = fuse_conv_and_bn(m.conv, m.bn)  # update conv
-                delattr(m, 'bn')  # remove batchnorm
+            elif type(m) is Conv:
+
+                if isinstance(m.conv, MyConv2dSVD):
+                    m.conv.reshape_weight()
+                if hasattr(m, 'bn'):
+                    m.conv = fuse_conv_and_bn(m.conv, m.bn)  # update conv
+                    delattr(m, 'bn')  # remove batchnorm
                 m.forward = m.fuseforward  # update forward
             elif isinstance(m, (IDetect, IAuxDetect)):
                 m.fuse()

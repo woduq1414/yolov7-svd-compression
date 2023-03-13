@@ -6,6 +6,13 @@ from models.common import Conv, DWConv
 from utils.google_utils import attempt_download
 from models.experimental import Ensemble
 
+from models.experimental import attempt_load
+import torch
+
+from tqdm.auto import tqdm
+from models.custom import MyConv2dSVD
+from copy import deepcopy
+
 
 def attempt_load_not_fuse(weights, map_location=None):
     # Loads an ensemble of models weights=[a,b,c] or a single model weights=[a] or weights=a
@@ -33,13 +40,6 @@ def attempt_load_not_fuse(weights, map_location=None):
         return model  # return ensemble
 
 
-from models.experimental import attempt_load
-import torch
-
-
-from tqdm.auto import tqdm
-from models.custom import MyConv2dSVD, MyConv2d
-from copy import deepcopy
 
 
 def load_model(weights):
@@ -50,8 +50,10 @@ def load_model(weights):
     return model, model_not_fuse
 
 
-def compress_model(model, model_not_fuse, is_use_svd=True):
-    for i in tqdm(range(len(model.model))):
+
+
+def compress_model(model, model_not_fuse):
+    for i in tqdm(range(len(model_not_fuse.model))):
 
         try:
             model.model[i].conv
@@ -59,39 +61,77 @@ def compress_model(model, model_not_fuse, is_use_svd=True):
             continue
 
         conv = model.model[i].conv
-        if is_use_svd:
 
 
+        new_conv = MyConv2dSVD(conv.in_channels, conv.out_channels, conv.kernel_size, conv.stride, conv.padding)
 
-            new_conv = MyConv2dSVD(conv.in_channels, conv.out_channels, conv.kernel_size, conv.stride, conv.padding)
+        l1 = get_l1_norm_average(model.model[i])
 
-            l1 = get_l1_norm_average(model.model[i])
+        w = conv.weight.data
+        w_r = w.view(w.size(0), -1).t()
 
-            w = conv.weight.data
-            w_r = w.view(w.size(0), -1).t()
-
-            if l1 >= 1:
-                u, s, v = torch.svd_lowrank(w_r, int(min(w_r.shape) * 1))
-            elif l1 >= 0.05:
-                u, s, v = torch.svd_lowrank(w_r, int(min(w_r.shape) * 0.9))
-            elif l1 >= 0.03:
-                u, s, v = torch.svd_lowrank(w_r, int(min(w_r.shape) * 0.80))
-            else:
-                u, s, v = torch.svd_lowrank(w_r, int(min(w_r.shape) * 0.62))
-
-            s_r = s.reshape(1, -1)
-            new_conv.weight.data = torch.nn.Parameter(torch.cat([u, s_r, v], 0))
-            new_conv.bias = conv.bias
-
-            if w_r.shape[0] * w_r.shape[1] > new_conv.weight.shape[0] * new_conv.weight.shape[1]:
-                model.model[i].conv = new_conv
+        if l1 >= 1:
+            u, s, v = torch.svd_lowrank(w_r, int(min(w_r.shape) * 1))
+        elif l1 >= 0.05:
+            u, s, v = torch.svd_lowrank(w_r, int(min(w_r.shape) * 0.9))
+        elif l1 >= 0.03:
+            u, s, v = torch.svd_lowrank(w_r, int(min(w_r.shape) * 0.80))
         else:
-            new_conv = MyConv2d(conv.in_channels, conv.out_channels, conv.kernel_size, conv.stride, conv.padding)
-            new_conv.weight.data = conv.weight.data
-            new_conv.bias = conv.bias
+            u, s, v = torch.svd_lowrank(w_r, int(min(w_r.shape) * 0.62))
 
+        s_r = s.reshape(1, -1)
+        new_conv.weight.data = torch.nn.Parameter(torch.cat([u, s_r, v], 0))
+        new_conv.bias = conv.bias
+
+        if w_r.shape[0] * w_r.shape[1] > new_conv.weight.shape[0] * new_conv.weight.shape[1]:
+            model.model[i].conv = new_conv
     model.model[-1] = model_not_fuse.model[-1]
     return model
+
+
+# def compress_model(model, model_not_fuse, is_use_svd=True):
+#     for i in tqdm(range(len(model.model))):
+#
+#         try:
+#             model.model[i].conv
+#         except AttributeError:
+#             continue
+#
+#         conv = model.model[i].conv
+#         if is_use_svd:
+#
+#
+#
+#             new_conv = MyConv2dSVD(conv.in_channels, conv.out_channels, conv.kernel_size, conv.stride, conv.padding)
+#
+#             l1 = get_l1_norm_average(model.model[i])
+#
+#             w = conv.weight.data
+#             w_r = w.view(w.size(0), -1).t()
+#
+#             if l1 >= 1:
+#                 u, s, v = torch.svd_lowrank(w_r, int(min(w_r.shape) * 1))
+#             elif l1 >= 0.05:
+#                 u, s, v = torch.svd_lowrank(w_r, int(min(w_r.shape) * 0.9))
+#             elif l1 >= 0.03:
+#                 u, s, v = torch.svd_lowrank(w_r, int(min(w_r.shape) * 0.80))
+#             else:
+#                 u, s, v = torch.svd_lowrank(w_r, int(min(w_r.shape) * 0.62))
+#
+#             s_r = s.reshape(1, -1)
+#             new_conv.weight.data = torch.nn.Parameter(torch.cat([u, s_r, v], 0))
+#             new_conv.bias = conv.bias
+#
+#             if w_r.shape[0] * w_r.shape[1] > new_conv.weight.shape[0] * new_conv.weight.shape[1]:
+#                 model.model[i].conv = new_conv
+#         else:
+#             new_conv = MyConv2d(conv.in_channels, conv.out_channels, conv.kernel_size, conv.stride, conv.padding)
+#             new_conv.weight.data = conv.weight.data
+#             new_conv.bias = conv.bias
+#
+#     model.model[-1] = model_not_fuse.model[-1]
+#     return model
+
 
 
 def save_model(model, output_path, is_half=True):
@@ -115,17 +155,13 @@ def get_l1_norm_average(x):
     return torch.mean(torch.abs(w))
 
 
-
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(prog='svd-compress.py')
     parser.add_argument('--weights', type=str, default='yolov7.pt', help='model.pt path(s)')
     parser.add_argument('--output-path', type=str, default='compressed.pt', help='model.pt path(s)')
-    parser.add_argument('--no-svd', action='store_true',  help='augmented inference')
-    parser.add_argument('--no-half', action='store_true',  help='augmented inference')
+    parser.add_argument('--no-half', action='store_true', help='augmented inference')
     opt = parser.parse_args()
 
-
     model, model_not_fuse = load_model(opt.weights)
-    compress_model(model, model_not_fuse, not opt.no_svd)
+    compress_model(model, model_not_fuse)
     save_model(model, opt.output_path, not opt.no_half)
